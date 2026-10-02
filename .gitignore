@@ -1,0 +1,22 @@
+# dependencies & builds
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# environment & secrets
+.env
+.env.*
+!.env.example
+
+# local & editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# earlier attempts, kept locally for reference and never committed
+_archive/

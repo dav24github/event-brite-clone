@@ -68,7 +68,7 @@ A rule that spans tables is listed under each table it touches.
 
 ### events
 
-- [ ] `organizer_id` nn fk → `organizers` RESTRICT · BR-E1, BR-U6
+- [x] `organizer_id` nn fk → `organizers` RESTRICT · BR-E1, BR-U6
 - [ ] `organizer_id` immutable · trg BEFORE UPDATE · BR-E1
 - [x] `title` varchar(120), ≥ 3 chars ck · BR-E2
 - [x] `description` ≤ 10 000 ck · BR-E2
@@ -92,45 +92,45 @@ A rule that spans tables is listed under each table it touches.
 - [x] `created_at`, `updated_at` nn def `now()` · BR-E12
 - [ ] `updated_at` refreshed on update · trg `set_updated_at()` · BR-E12
 - [x] `location_type` enum, nullable in draft · BR-L1, BR-L4
-- [ ] `venue_id` only when in person; `meeting_url` only when online ck · BR-L1
-- [ ] `venue_id` fk → `venues` RESTRICT · BR-L2, BR-R7
-- [ ] `meeting_url` https ck · BR-L3
+- [x] `venue_id` only when in person; `meeting_url` only when online ck · BR-L1
+- [x] `venue_id` fk → `venues` RESTRICT · BR-L2, BR-R7
+- [x] `meeting_url` https ck · BR-L3
 - [ ] `meeting_url` shown only to active ticket holders · app · BR-L3
-- [ ] `category_id` fk → `categories` RESTRICT · BR-C3
-- [ ] `currency` char(3) nn, `^[A-Z]{3}$` ck · BR-T5, D3
+- [x] `category_id` fk → `categories` RESTRICT · BR-C3
+- [x] `currency` char(3) nn, `^[A-Z]{3}$` ck · BR-T5, D3
 - [ ] `sales_end <= ends_at` still holds when `ends_at` changes · trg · BR-T6, D6
 
 ### ticket_types
 
-- [ ] `event_id` nn fk → `events` CASCADE · BR-T1, BR-E8, D9
-- [ ] uq `(ticket_type_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
+- [x] `event_id` nn fk → `events` CASCADE · BR-T1, BR-E8, D9
+- [x] uq `(ticket_type_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
 - [ ] `event_id` immutable · trg · BR-R1 (composite FK relies on it)
-- [ ] `name` varchar(60), not blank ck · BR-T1
-- [ ] uq index `(event_id, lower(name))` · BR-T1
-- [ ] `description` varchar(500) nullable · BR-T1
-- [ ] `quantity` int nn, 1–100 000 ck · BR-T2
+- [x] `name` varchar(60), not blank ck · BR-T1
+- [x] uq index `(event_id, lower(name))` · BR-T1
+- [x] `description` varchar(500) nullable · BR-T1
+- [x] `quantity` int nn, 1–100 000 ck · BR-T2
 - [ ] lowering `quantity` below active tickets rejected · trg BEFORE UPDATE (row lock + count) · BR-T4, D4
-- [ ] `price` numeric(12,2) nn def 0, `>= 0` ck · BR-T5, D3
-- [ ] `price = 0` ck (v0 only, dropped in v1) · BR-T5
-- [ ] `sales_start`, `sales_end` nullable; `sales_end > sales_start` ck · BR-T6
+- [x] `price` numeric(12,2) nn def 0, `>= 0` ck · BR-T5, D3
+- [x] `price = 0` ck (v0 only, dropped in v1) · BR-T5
+- [x] `sales_start`, `sales_end` nullable; `sales_end > sales_start` ck · BR-T6
 - [ ] `sales_end <= events.ends_at` · trg · BR-T6, D6
 - [ ] defaults resolved at read time: `COALESCE(sales_start, published_at)`, `COALESCE(sales_end, starts_at)` · queries/fn · BR-T6, D6
-- [ ] `max_per_checkout` int nn def 10, 1–50 ck · BR-T7
-- [ ] `position` int nn, uq `(event_id, position)` · BR-T8
-- [ ] `off_sale_at` nullable · BR-T9
+- [x] `max_per_checkout` int nn def 10, 1–50 ck · BR-T7
+- [x] `position` int nn, uq `(event_id, position)` · BR-T8
+- [x] `off_sale_at` nullable · BR-T9
 - [ ] delete only with no tickets · fk RESTRICT on `tickets.ticket_type_id` · BR-T9
 
 ### reservations
 
-- [ ] `user_id` nn fk → `users` RESTRICT · BR-R1, BR-U6
-- [ ] `event_id` nn fk → `events` RESTRICT · BR-R1, BR-E8
-- [ ] uq `(reservation_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
+- [x] `user_id` nn fk → `users` RESTRICT · BR-R1, BR-U6
+- [x] `event_id` nn fk → `events` RESTRICT · BR-R1, BR-E8
+- [x] uq `(reservation_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
 - [ ] `event_id` immutable · trg · BR-R1
-- [ ] `created_at` nn def `now()` · BR-R1
-- [ ] `reference_code` nn uq, `^EBK-[2-9A-HJKMNP-Z]{6}$` ck · BR-R3, D8
+- [x] `created_at` nn def `now()` · BR-R1
+- [x] `reference_code` nn uq, `^EBK-[2-9A-HJKMNP-Z]{6}$` ck · BR-R3, D8
 - [ ] `reference_code` generated randomly, retried on collision · fn · BR-R3, D8
-- [ ] `status` reservation_status nn def `confirmed` · BR-R4
-- [ ] `cancelled_at` set iff cancelled ck · BR-R5
+- [x] `status` reservation_status nn def `confirmed` · BR-R4
+- [x] `cancelled_at` set iff cancelled ck · BR-R5
 - [ ] cancel own reservation only before event start; cancels all its tickets · fn · BR-R5
 - [ ] never deleted · trg BEFORE DELETE raises · BR-K4, D9
 

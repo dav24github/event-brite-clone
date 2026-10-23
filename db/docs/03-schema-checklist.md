@@ -24,8 +24,8 @@ A rule that spans tables is listed under each table it touches.
 
 - [x] `event_status` ENUM `draft, published, cancelled, completed` · BR-E5
 - [x] `location_type` ENUM `in_person, online` · BR-L1
-- [ ] `reservation_status` ENUM `confirmed, cancelled` (v1 adds `pending, paid, refunded, expired` with `ALTER TYPE … ADD VALUE`) · BR-R4
-- [ ] `ticket_status` ENUM `active, cancelled` (`used` comes with check-in) · BR-K3, BR-K5
+- [x] `reservation_status` ENUM `confirmed, cancelled` (v1 adds `pending, paid, refunded, expired` with `ALTER TYPE … ADD VALUE`) · BR-R4
+- [x] `ticket_status` ENUM `active, cancelled` (`used` comes with check-in) · BR-K3, BR-K5
 
 ## 2. Tables
 
@@ -37,10 +37,10 @@ A rule that spans tables is listed under each table it touches.
 - [x] `password_hash` nn, not blank ck · BR-U2
 - [x] `full_name` varchar(100) nn, not blank ck · BR-U3
 - [x] `created_at`, `updated_at` nn def `now()` · BR-U7
-- [ ] `updated_at` refreshed on update · trg `set_updated_at()` · BR-U7
+- [x] `updated_at` refreshed on update · trg `set_updated_at()` · BR-U7
 - [x] `deleted_at` nullable · D9
-- [ ] anonymizing keeps every CHECK valid (e.g. email `deleted-<id>@invalid.local`) · app/fn · BR-U6, D9
-- [ ] no hard delete of a user with history · covered by `RESTRICT` FKs below · BR-U6
+- [x] anonymizing keeps every CHECK valid (e.g. email `deleted-<id>@invalid.local`) · app/fn · BR-U6, D9
+- [x] no hard delete of a user with history · covered by `RESTRICT` FKs below · BR-U6
 
 ### organizers
 
@@ -54,7 +54,7 @@ A rule that spans tables is listed under each table it touches.
 
 - [x] `name` nn uq, not blank ck · BR-C1
 - [x] `slug` nn uq, `^[a-z0-9]+(-[a-z0-9]+)*$` ck · BR-C1
-- [ ] can't delete if used · fk RESTRICT on `events.category_id` · BR-C3
+- [x] can't delete if used · fk RESTRICT on `events.category_id` · BR-C3
 - [ ] reference rows (10 categories) · `seed.sql` · BR-C1
 
 ### venues
@@ -69,28 +69,28 @@ A rule that spans tables is listed under each table it touches.
 ### events
 
 - [x] `organizer_id` nn fk → `organizers` RESTRICT · BR-E1, BR-U6
-- [ ] `organizer_id` immutable · trg BEFORE UPDATE · BR-E1
+- [x] `organizer_id` immutable · trg BEFORE UPDATE · BR-E1
 - [x] `title` varchar(120), ≥ 3 chars ck · BR-E2
 - [x] `description` ≤ 10 000 ck · BR-E2
 - [x] `ends_at > starts_at` ck · BR-E3
 - [x] duration ≤ 14 days ck · BR-E3
 - [x] `timezone` text nn · BR-E4
-- [ ] `timezone` exists in `pg_timezone_names` · trg (a CHECK can't query a view) · BR-E4, D7
+- [x] `timezone` exists in `pg_timezone_names` · trg (a CHECK can't query a view) · BR-E4, D7
 - [ ] DST-ambiguous wall-clock input rejected · app · BR-E4, D7
 - [x] `status` event_status nn def `draft` · BR-E5
-- [ ] only `draft→published`, `published→cancelled`, `published→completed` · trg BEFORE UPDATE · BR-E5, D5
+- [x] only `draft→published`, `published→cancelled`, `published→completed` · trg BEFORE UPDATE · BR-E5, D5
 - [x] description, category and complete location required unless draft ck · BR-E6, BR-C2, BR-L4
-- [ ] on publish: `starts_at > now()` and ≥ 1 ticket type · trg BEFORE UPDATE · BR-E6, D5
+- [x] on publish: `starts_at > now()` and ≥ 1 ticket type · trg BEFORE UPDATE · BR-E6, D5
 - [x] `published_at` set iff not draft ck · BR-E6
 - [ ] draft only visible to its organizer; browse = published + upcoming · app / queries · BR-E7
-- [ ] delete only while `published_at IS NULL` · trg BEFORE DELETE · BR-E8, D9
+- [x] delete only while `published_at IS NULL` · trg BEFORE DELETE · BR-E8, D9
 - [x] `cancelled_at` set iff cancelled ck · BR-E9
 - [x] `cancellation_reason` varchar(500) · BR-E9
-- [ ] on `published→cancelled`: cancel all active tickets and their reservations · trg AFTER UPDATE · BR-E9, BR-K3, D5
+- [x] on `published→cancelled`: cancel all active tickets and their reservations · trg AFTER UPDATE · BR-E9, BR-K3, D5
 - [ ] `completed` = `ends_at < now` in queries; job sets status later · queries · BR-E10
 - [x] `cover_url` https, ≤ 2048 ck · BR-E11
 - [x] `created_at`, `updated_at` nn def `now()` · BR-E12
-- [ ] `updated_at` refreshed on update · trg `set_updated_at()` · BR-E12
+- [x] `updated_at` refreshed on update · trg `set_updated_at()` · BR-E12
 - [x] `location_type` enum, nullable in draft · BR-L1, BR-L4
 - [x] `venue_id` only when in person; `meeting_url` only when online ck · BR-L1
 - [x] `venue_id` fk → `venues` RESTRICT · BR-L2, BR-R7
@@ -98,7 +98,7 @@ A rule that spans tables is listed under each table it touches.
 - [ ] `meeting_url` shown only to active ticket holders · app · BR-L3
 - [x] `category_id` fk → `categories` RESTRICT · BR-C3
 - [x] `currency` char(3) nn, `^[A-Z]{3}$` ck · BR-T5, D3
-- [ ] `sales_end <= ends_at` still holds when `ends_at` changes · trg · BR-T6, D6
+- [x] `sales_end <= ends_at` still holds when `ends_at` changes · trg · BR-T6, D6
 
 ### ticket_types
 
@@ -136,22 +136,22 @@ A rule that spans tables is listed under each table it touches.
 
 ### tickets
 
-- [ ] `reservation_id`, `ticket_type_id`, `event_id` all nn (a NULL would skip the composite FK) · BR-R1
-- [ ] fk `(reservation_id, event_id)` → `reservations` RESTRICT · BR-R1, BR-K4, D2
-- [ ] fk `(ticket_type_id, event_id)` → `ticket_types` RESTRICT · BR-R1, BR-T9, D2
-- [ ] `code` uuid nn uq def `gen_random_uuid()` · BR-K2, D8
-- [ ] `unit_price` numeric(12,2) nn, `>= 0` ck · BR-R7, D3
-- [ ] `status` ticket_status nn def `active` · BR-K3
-- [ ] `cancelled_at` set iff cancelled ck · BR-K3
+- [x] `reservation_id`, `ticket_type_id`, `event_id` all nn (a NULL would skip the composite FK) · BR-R1
+- [x] fk `(reservation_id, event_id)` → `reservations` RESTRICT · BR-R1, BR-K4, D2
+- [x] fk `(ticket_type_id, event_id)` → `ticket_types` RESTRICT · BR-R1, BR-T9, D2
+- [x] `code` uuid nn uq def `gen_random_uuid()` · BR-K2, D8
+- [x] `unit_price` numeric(12,2) nn, `>= 0` ck · BR-R7, D3
+- [x] `status` ticket_status nn def `active` · BR-K3
+- [x] `cancelled_at` set iff cancelled ck · BR-K3
 - [ ] cancelled never becomes active again · trg BEFORE UPDATE · BR-K3
 - [ ] ticket status matches reservation status (v0) · test · 02-design denormalizations
 - [ ] never deleted · trg BEFORE DELETE raises · BR-K4, D9
-- [ ] owner = reservation's user (no own user column) · design · BR-K5
+- [x] owner = reservation's user (no own user column) · design · BR-K5
 
 ## 3. Indexes
 
-- [ ] partial `tickets (ticket_type_id) WHERE status = 'active'` · BR-T3, D4
-- [ ] `tickets (reservation_id)`, `reservations (user_id)`, `reservations (event_id)`, `events (organizer_id)`, `events (category_id)` (FK columns aren't indexed automatically) · performance
+- [x] partial `tickets (ticket_type_id) WHERE status = 'active'` · BR-T3, D4
+- [x] `tickets (reservation_id)`, `reservations (user_id)`, `reservations (event_id)`, `events (organizer_id)`, `events (category_id)` (FK columns aren't indexed automatically) · performance
 
 ## 4–6. Functions and triggers
 

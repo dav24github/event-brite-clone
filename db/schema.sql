@@ -285,6 +285,13 @@ CREATE TRIGGER trg_events_reject_change_timestamps
           OR (OLD.cancelled_at IS NOT NULL AND OLD.cancelled_at IS DISTINCT FROM NEW.cancelled_at))
     EXECUTE FUNCTION reject_change('published_at/cancelled_at');               -- BR-E6, BR-E9
 
+-- The tickets composite FK (ticket_type_id, event_id) relies on this never changing.
+CREATE TRIGGER trg_ticket_types_reject_change_event
+    BEFORE UPDATE OF event_id ON ticket_types
+    FOR EACH ROW
+    WHEN (OLD.event_id IS DISTINCT FROM NEW.event_id)
+    EXECUTE FUNCTION reject_change('event_id');                                -- BR-R1, D2
+
 -- -----------------------------------------------------------------------------
 -- guard_events_timezone · events                                    BR-E4, D7
 -- -----------------------------------------------------------------------------
@@ -445,6 +452,66 @@ CREATE TRIGGER trg_events_guard_ends_at
     FOR EACH ROW
     WHEN (OLD.ends_at IS DISTINCT FROM NEW.ends_at)
     EXECUTE FUNCTION guard_events_ends_at();                                   -- BR-T6, D6
+
+-- -----------------------------------------------------------------------------
+-- guard_ticket_types_lowering_quantity · ticket_types                BR-T4, D4
+-- -----------------------------------------------------------------------------
+-- Raising is always allowed; lowering can't go below the active tickets.
+-- No extra lock: this UPDATE already holds the ticket type's row lock, the same
+-- lock reserve_tickets() takes before counting, so the two take turns.
+CREATE FUNCTION guard_ticket_types_lowering_quantity() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE v_active_tickets BIGINT;
+BEGIN
+    SELECT count(*) INTO v_active_tickets 
+        FROM tickets
+        WHERE ticket_type_id = NEW.ticket_type_id AND status = 'active';
+    
+    IF v_active_tickets > NEW.quantity THEN
+        RAISE EXCEPTION 'ticket_types: quantity % is below the % active tickets', NEW.quantity, v_active_tickets
+            USING ERRCODE = 'check_violation', CONSTRAINT = TG_NAME;
+    END IF;
+
+    RETURN NEW;    
+END;
+$$;
+
+CREATE TRIGGER trg_ticket_types_guard_quantity
+    BEFORE UPDATE OF quantity ON ticket_types
+    FOR EACH ROW
+    WHEN (NEW.quantity < OLD.quantity)                                         -- raising is always allowed
+    EXECUTE FUNCTION guard_ticket_types_lowering_quantity();                   -- BR-T4, D4
+
+-- -----------------------------------------------------------------------------
+-- guard_ticket_types_sales_end · ticket_types                        BR-T6, D6
+-- -----------------------------------------------------------------------------
+-- A ticket type can't sell after its event ends. The other direction (the event's
+-- ends_at moving earlier) is guard_events_ends_at. FOR SHARE makes the two take
+-- turns on the event row, so neither checks a value the other is changing.
+CREATE FUNCTION guard_ticket_types_sales_end() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_ends_at TIMESTAMPTZ;
+BEGIN
+    SELECT ends_at INTO v_ends_at
+      FROM events
+     WHERE event_id = NEW.event_id
+       FOR SHARE;                                                              -- waits for / blocks an ends_at change
+
+    IF NEW.sales_end > v_ends_at THEN
+        RAISE EXCEPTION 'ticket_types: sales_end % is after the event''s ends_at %', NEW.sales_end, v_ends_at
+            USING ERRCODE = 'check_violation', CONSTRAINT = TG_NAME;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_ticket_types_guard_sales_end
+    BEFORE INSERT OR UPDATE OF sales_end ON ticket_types
+    FOR EACH ROW
+    WHEN (NEW.sales_end IS NOT NULL)                                           -- NULL = until starts_at, always valid
+    EXECUTE FUNCTION guard_ticket_types_sales_end();                           -- BR-T6, D6
 
 /* -------------------------------------------------------------------------- */
 /*                         FUNCTIONS CALLED BY THE APP                        */

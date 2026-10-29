@@ -104,21 +104,21 @@ A rule that spans tables is listed under each table it touches.
 
 - [x] `event_id` nn fk → `events` CASCADE · BR-T1, BR-E8, D9
 - [x] uq `(ticket_type_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
-- [ ] `event_id` immutable · trg · BR-R1 (composite FK relies on it)
+- [x] `event_id` immutable · trg · BR-R1 (composite FK relies on it)
 - [x] `name` varchar(60), not blank ck · BR-T1
 - [x] uq index `(event_id, lower(name))` · BR-T1
 - [x] `description` varchar(500) nullable · BR-T1
 - [x] `quantity` int nn, 1–100 000 ck · BR-T2
-- [ ] lowering `quantity` below active tickets rejected · trg BEFORE UPDATE (row lock + count) · BR-T4, D4
+- [x] lowering `quantity` below active tickets rejected · trg BEFORE UPDATE (row lock + count) · BR-T4, D4
 - [x] `price` numeric(12,2) nn def 0, `>= 0` ck · BR-T5, D3
 - [x] `price = 0` ck (v0 only, dropped in v1) · BR-T5
 - [x] `sales_start`, `sales_end` nullable; `sales_end > sales_start` ck · BR-T6
-- [ ] `sales_end <= events.ends_at` · trg · BR-T6, D6
+- [x] `sales_end <= events.ends_at` · trg · BR-T6, D6
 - [ ] defaults resolved at read time: `COALESCE(sales_start, published_at)`, `COALESCE(sales_end, starts_at)` · queries/fn · BR-T6, D6
 - [x] `max_per_checkout` int nn def 10, 1–50 ck · BR-T7
 - [x] `position` int nn, uq `(event_id, position)` · BR-T8
 - [x] `off_sale_at` nullable · BR-T9
-- [ ] delete only with no tickets · fk RESTRICT on `tickets.ticket_type_id` · BR-T9
+- [x] delete only with no tickets · fk RESTRICT on `tickets.ticket_type_id` · BR-T9
 
 ### reservations
 

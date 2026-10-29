@@ -258,6 +258,19 @@ CREATE TRIGGER trg_events_set_updated_at
     EXECUTE FUNCTION set_updated_at();                                         -- BR-E12
 
 -- -----------------------------------------------------------------------------
+-- reject_delete · rows that are never deleted                       BR-K4, D9
+-- -----------------------------------------------------------------------------
+-- Generic: attendees keep their history and organizers their reports, so
+-- reservations and tickets are cancelled, never deleted. Only raises.
+CREATE FUNCTION reject_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION '% rows are never deleted', TG_TABLE_NAME
+        USING ERRCODE = 'restrict_violation', CONSTRAINT = TG_NAME;            -- same SQLSTATE as an FK RESTRICT
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
 -- reject_change · columns that never change                     BR-E1, BR-R1, …
 -- -----------------------------------------------------------------------------
 -- Generic: the trigger passes the column name(s) as an argument, and its WHEN
@@ -291,6 +304,15 @@ CREATE TRIGGER trg_ticket_types_reject_change_event
     FOR EACH ROW
     WHEN (OLD.event_id IS DISTINCT FROM NEW.event_id)
     EXECUTE FUNCTION reject_change('event_id');                                -- BR-R1, D2
+
+-- A reservation never moves to another event or user (no ticket transfers in v0).
+-- The tickets composite FK (reservation_id, event_id) relies on event_id.
+CREATE TRIGGER trg_reservations_reject_change_keys
+    BEFORE UPDATE OF event_id, user_id ON reservations
+    FOR EACH ROW
+    WHEN (   OLD.event_id IS DISTINCT FROM NEW.event_id
+          OR OLD.user_id  IS DISTINCT FROM NEW.user_id)
+    EXECUTE FUNCTION reject_change('event_id/user_id');                        -- BR-R1, BR-K5, D2
 
 -- -----------------------------------------------------------------------------
 -- guard_events_timezone · events                                    BR-E4, D7
@@ -513,6 +535,103 @@ CREATE TRIGGER trg_ticket_types_guard_sales_end
     WHEN (NEW.sales_end IS NOT NULL)                                           -- NULL = until starts_at, always valid
     EXECUTE FUNCTION guard_ticket_types_sales_end();                           -- BR-T6, D6
 
+-- -----------------------------------------------------------------------------
+-- guard_ticket_types_delete · ticket_types                                 BR-E6
+-- -----------------------------------------------------------------------------
+-- A published (or cancelled/completed) event keeps at least one ticket type, so
+-- the publish check can't be undone afterwards. Drafts are free to delete them.
+-- When a draft event is deleted, CASCADE runs this after the event row is gone:
+-- no event found → allowed.
+-- FOR NO KEY UPDATE on the event: two deletes on the same event take turns, so they
+-- can't each see the other's ticket type and both delete. (It doesn't block inserts,
+-- whose FK check only needs FOR KEY SHARE.)
+CREATE FUNCTION guard_ticket_types_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_status event_status;
+BEGIN
+    SELECT status INTO v_status
+      FROM events
+     WHERE event_id = OLD.event_id
+       FOR NO KEY UPDATE;
+
+    IF v_status <> 'draft'                                                     -- NULL (event gone) → skipped
+       AND NOT EXISTS (SELECT 1 FROM ticket_types
+                        WHERE event_id = OLD.event_id
+                          AND ticket_type_id <> OLD.ticket_type_id) THEN
+        RAISE EXCEPTION 'ticket_types: can''t delete the last ticket type of a % event', v_status
+            USING ERRCODE = 'check_violation', CONSTRAINT = TG_NAME;
+    END IF;
+
+    RETURN OLD;                -- BEFORE DELETE: OLD lets the delete through
+END;
+$$;
+
+CREATE TRIGGER trg_ticket_types_guard_delete
+    BEFORE DELETE ON ticket_types
+    FOR EACH ROW
+    EXECUTE FUNCTION guard_ticket_types_delete();                              -- BR-E6
+
+-- -----------------------------------------------------------------------------
+-- reservations · no reactivation, no delete                  BR-R5, BR-K4, D9
+-- -----------------------------------------------------------------------------
+-- A cancelled reservation stays cancelled; its tickets went back to availability.
+CREATE TRIGGER trg_reservations_no_reactivate
+    BEFORE UPDATE OF status ON reservations
+    FOR EACH ROW
+    WHEN (OLD.status = 'cancelled' AND NEW.status <> 'cancelled')
+    EXECUTE FUNCTION reject_change('status');                                  -- BR-R5
+
+-- RESTRICT from tickets already blocks most deletes; this also covers a reservation
+-- with no tickets, and gives a clear message.
+CREATE TRIGGER trg_reservations_no_delete
+    BEFORE DELETE ON reservations
+    FOR EACH ROW
+    EXECUTE FUNCTION reject_delete();                                          -- BR-K4, D9
+
+-- -----------------------------------------------------------------------------
+-- guard_tickets_status · tickets                                           BR-K3
+-- -----------------------------------------------------------------------------
+-- Forbidden: cancelled → active. With check-in (used), also forbid moves out of
+-- cancelled and used, or switch to listing the allowed moves like guard_events_status.
+CREATE FUNCTION guard_tickets_status() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF (OLD.status = 'cancelled' AND NEW.status = 'active') THEN
+        RAISE EXCEPTION 'tickets.status can''t go from % to %', OLD.status, NEW.status   -- BR-K3
+            USING ERRCODE = 'check_violation', CONSTRAINT = TG_NAME;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_tickets_status_transition
+    BEFORE UPDATE OF status ON tickets
+    FOR EACH ROW
+    WHEN (OLD.status IS DISTINCT FROM NEW.status)
+    EXECUTE FUNCTION guard_tickets_status();                                   -- BR-K3
+
+-- -----------------------------------------------------------------------------
+-- tickets · fixed columns, no delete                    BR-K2, BR-K4, BR-R7, D2
+-- -----------------------------------------------------------------------------
+-- Only status and cancelled_at ever change. code is the QR credential (BR-K2),
+-- unit_price the price snapshot (BR-R7), and the ids hold the composite FKs (D2).
+CREATE TRIGGER trg_tickets_reject_change_keys
+    BEFORE UPDATE OF code, unit_price, reservation_id, ticket_type_id, event_id ON tickets
+    FOR EACH ROW
+    WHEN (   OLD.code           IS DISTINCT FROM NEW.code
+          OR OLD.unit_price     IS DISTINCT FROM NEW.unit_price
+          OR OLD.reservation_id IS DISTINCT FROM NEW.reservation_id
+          OR OLD.ticket_type_id IS DISTINCT FROM NEW.ticket_type_id
+          OR OLD.event_id       IS DISTINCT FROM NEW.event_id)
+    EXECUTE FUNCTION reject_change('code/unit_price/reservation_id/ticket_type_id/event_id');  -- BR-K2, BR-R7, D2
+
+CREATE TRIGGER trg_tickets_no_delete
+    BEFORE DELETE ON tickets
+    FOR EACH ROW
+    EXECUTE FUNCTION reject_delete();                                          -- BR-K4, D9
+
 /* -------------------------------------------------------------------------- */
 /*                         FUNCTIONS CALLED BY THE APP                        */
 /* -------------------------------------------------------------------------- */
@@ -551,5 +670,76 @@ BEGIN
      WHERE user_id = p_user_id;
 
     RETURN v_email;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- gen_reference_code · reservations                                 BR-R3, D8
+-- -----------------------------------------------------------------------------
+-- 'EBK-' + 6 random characters. The alphabet leaves out 0/O and 1/I/L so codes
+-- can be read out to support. 31^6 ≈ 887 million codes; random, so they don't
+-- reveal how many reservations exist. Not a credential (D8), so random() is enough.
+-- Uniqueness isn't checked here: reserve_tickets() retries on unique_violation.
+CREATE FUNCTION gen_reference_code() RETURNS TEXT
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_alphabet CONSTANT TEXT := '23456789ABCDEFGHJKMNPQRSTUVWXYZ';              -- same set as ck_reservations_reference_code_format
+    v_code     TEXT := 'EBK-';
+BEGIN
+    FOR i IN 1..6 LOOP
+        v_code := v_code || substr(v_alphabet, 1 + floor(random() * length(v_alphabet))::int, 1);
+    END LOOP;
+    RETURN v_code;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- cancel_reservation · reservations, tickets                           BR-R5
+-- -----------------------------------------------------------------------------
+-- An attendee cancels their own reservation until the event starts; all its
+-- tickets are cancelled and return to availability. Lock order: reservation,
+-- then tickets (same as trg_events_cancel_cascade). Checks run after the lock.
+CREATE FUNCTION cancel_reservation(p_user_id BIGINT, p_reservation_id BIGINT) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_status reservation_status;
+    v_starts_at TIMESTAMPTZ;
+BEGIN
+    -- lock the row (reservation)
+    SELECT r.status, e.starts_at INTO v_status, v_starts_at
+        FROM reservations r
+        JOIN events e USING (event_id)
+    WHERE r.reservation_id = p_reservation_id
+        AND r.user_id = p_user_id
+        FOR UPDATE OF r;
+
+    -- IF NOT FOUND
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'reservation % not found for user %', p_reservation_id, p_user_id
+            USING ERRCODE = 'no_data_found';      
+    END IF;
+
+    -- IF already cancelled
+    IF (v_status <> 'confirmed') THEN
+        RAISE EXCEPTION 'Reservation: % is already %.', p_reservation_id, v_status
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- IF event has started
+    IF v_starts_at <= now() THEN
+        RAISE EXCEPTION 'Reservation: % can''t be cancelled, the event has started.', p_reservation_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    
+    -- cancel reservation
+    UPDATE reservations
+        SET status = 'cancelled', cancelled_at = now()
+    WHERE reservation_id = p_reservation_id;
+
+    -- cancell all its ticket
+    UPDATE tickets
+        SET status = 'cancelled', cancelled_at = now()
+    WHERE reservation_id = p_reservation_id
+        AND status = 'active';
 END;
 $$;

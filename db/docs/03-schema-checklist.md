@@ -119,20 +119,23 @@ A rule that spans tables is listed under each table it touches.
 - [x] `position` int nn, uq `(event_id, position)` · BR-T8
 - [x] `off_sale_at` nullable · BR-T9
 - [x] delete only with no tickets · fk RESTRICT on `tickets.ticket_type_id` · BR-T9
+- [x] can't delete the last ticket type of a non-draft event · trg BEFORE DELETE · BR-E6
 
 ### reservations
 
 - [x] `user_id` nn fk → `users` RESTRICT · BR-R1, BR-U6
 - [x] `event_id` nn fk → `events` RESTRICT · BR-R1, BR-E8
 - [x] uq `(reservation_id, event_id)` (target of the tickets composite FK) · BR-R1, D2
-- [ ] `event_id` immutable · trg · BR-R1
+- [x] `event_id` immutable · trg · BR-R1
+- [x] `user_id` immutable (no ticket transfers in v0) · trg · BR-K5
 - [x] `created_at` nn def `now()` · BR-R1
 - [x] `reference_code` nn uq, `^EBK-[2-9A-HJKMNP-Z]{6}$` ck · BR-R3, D8
-- [ ] `reference_code` generated randomly, retried on collision · fn · BR-R3, D8
+- [x] `reference_code` generated randomly, retried on collision · fn · BR-R3, D8
 - [x] `status` reservation_status nn def `confirmed` · BR-R4
 - [x] `cancelled_at` set iff cancelled ck · BR-R5
-- [ ] cancel own reservation only before event start; cancels all its tickets · fn · BR-R5
-- [ ] never deleted · trg BEFORE DELETE raises · BR-K4, D9
+- [x] cancel own reservation only before event start; cancels all its tickets · fn · BR-R5
+- [x] cancelled never becomes confirmed again · trg BEFORE UPDATE · BR-R5
+- [x] never deleted · trg BEFORE DELETE raises · BR-K4, D9
 
 ### tickets
 
@@ -143,9 +146,10 @@ A rule that spans tables is listed under each table it touches.
 - [x] `unit_price` numeric(12,2) nn, `>= 0` ck · BR-R7, D3
 - [x] `status` ticket_status nn def `active` · BR-K3
 - [x] `cancelled_at` set iff cancelled ck · BR-K3
-- [ ] cancelled never becomes active again · trg BEFORE UPDATE · BR-K3
+- [x] cancelled never becomes active again · trg BEFORE UPDATE · BR-K3
+- [x] `code`, `unit_price`, `reservation_id`, `ticket_type_id`, `event_id` immutable · trg · BR-K2, BR-R7, D2
 - [ ] ticket status matches reservation status (v0) · test · 02-design denormalizations
-- [ ] never deleted · trg BEFORE DELETE raises · BR-K4, D9
+- [x] never deleted · trg BEFORE DELETE raises · BR-K4, D9
 - [x] owner = reservation's user (no own user column) · design · BR-K5
 
 ## 3. Indexes
@@ -155,13 +159,16 @@ A rule that spans tables is listed under each table it touches.
 
 ## 4–6. Functions and triggers
 
-- [ ] `set_updated_at()` on `users`, `events` · BR-U7, BR-E12
+- [x] `set_updated_at()` on `users`, `events` · BR-U7, BR-E12
 - [ ] `reserve_tickets(user_id, event_id, {ticket_type_id: qty})` in one transaction · BR-R6
+  - [ ] event read `FOR SHARE`, so a concurrent cancel can't miss the new reservation · BR-E9
   - [ ] event `published` and `starts_at > now()` · BR-R2
+  - [ ] user not anonymized (`deleted_at IS NULL`); at least one ticket type requested · BR-U6, BR-T7
   - [ ] each type: inside sales window, `off_sale_at` null or in the future · BR-R2, BR-T6
   - [ ] each type belongs to the event · BR-R1
   - [ ] 1 ≤ qty ≤ `max_per_checkout` · BR-T7
   - [ ] lock ticket types `FOR UPDATE` in id order, count active, reject if over quantity · BR-T3, D4
+  - [ ] `reference_code` from `gen_reference_code()`, retried on `unique_violation` · BR-R3, D8
   - [ ] copy `price` to `unit_price` · BR-R7
   - [ ] any failure rolls back everything · BR-R6
 

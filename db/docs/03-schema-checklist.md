@@ -160,17 +160,17 @@ A rule that spans tables is listed under each table it touches.
 ## 4–6. Functions and triggers
 
 - [x] `set_updated_at()` on `users`, `events` · BR-U7, BR-E12
-- [ ] `reserve_tickets(user_id, event_id, {ticket_type_id: qty})` in one transaction · BR-R6
-  - [ ] event read `FOR SHARE`, so a concurrent cancel can't miss the new reservation · BR-E9
-  - [ ] event `published` and `starts_at > now()` · BR-R2
-  - [ ] user not anonymized (`deleted_at IS NULL`); at least one ticket type requested · BR-U6, BR-T7
-  - [ ] each type: inside sales window, `off_sale_at` null or in the future · BR-R2, BR-T6
-  - [ ] each type belongs to the event · BR-R1
-  - [ ] 1 ≤ qty ≤ `max_per_checkout` · BR-T7
-  - [ ] lock ticket types `FOR UPDATE` in id order, count active, reject if over quantity · BR-T3, D4
-  - [ ] `reference_code` from `gen_reference_code()`, retried on `unique_violation` · BR-R3, D8
-  - [ ] copy `price` to `unit_price` · BR-R7
-  - [ ] any failure rolls back everything · BR-R6
+- [x] `reserve_tickets(user_id, event_id, {ticket_type_id: qty})` in one transaction · BR-R6
+  - [x] event read `FOR SHARE`, so a concurrent cancel can't miss the new reservation · BR-E9
+  - [x] event `published` and `starts_at > now()` · BR-R2
+  - [x] user not anonymized (`deleted_at IS NULL`); at least one ticket type requested · BR-U6, BR-T7
+  - [x] each type: inside sales window, `off_sale_at` null or in the future · BR-R2, BR-T6
+  - [x] each type belongs to the event · BR-R1
+  - [x] 1 ≤ qty ≤ `max_per_checkout` · BR-T7
+  - [x] lock ticket types `FOR UPDATE` in id order, count active, reject if over quantity · BR-T3, D4
+  - [x] `reference_code` from `gen_reference_code()`, retried on `unique_violation` · BR-R3, D8
+  - [x] copy `price` to `unit_price` · BR-R7
+  - [x] any failure rolls back everything · BR-R6
 
 ## 7. Coverage check
 

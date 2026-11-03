@@ -743,3 +743,118 @@ BEGIN
         AND status = 'active';
 END;
 $$;
+
+-- -----------------------------------------------------------------------------
+-- reserve_tickets · reservations, tickets
+--     BR-R1, BR-R2, BR-R3, BR-R6, BR-R7, BR-T3, BR-T6, BR-T7, BR-E9, D4, D8
+-- -----------------------------------------------------------------------------
+-- One checkout: p_items maps ticket_type_id → quantity, e.g. '{"12": 2, "13": 1}'.
+-- Creates one reservation and its tickets, or nothing (any RAISE rolls back the
+-- whole call, BR-R6). Returns the reference code.
+-- Locks, in order: event FOR SHARE (a concurrent cancel waits for this checkout,
+-- or this checkout sees 'cancelled') → each ticket type FOR UPDATE in id order
+-- (one checkout counts at a time, no deadlocks) → inserts.
+CREATE FUNCTION reserve_tickets(p_user_id BIGINT, p_event_id BIGINT, p_items JSONB) RETURNS TEXT
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_item RECORD;
+    v_tt RECORD;
+    v_reservation_id BIGINT;
+    v_reference_code TEXT;
+    v_status event_status;
+    v_starts_at TIMESTAMPTZ;
+    v_published_at TIMESTAMPTZ;
+    v_active INT;
+BEGIN
+    -- 1. Checks that don't need a lock
+    IF p_items IS NULL OR p_items = '{}'::jsonb THEN
+        RAISE EXCEPTION 'No tickets specified for reservation'
+            USING ERRCODE = 'check_violation';
+    END IF; -- LOOP will not run if no items, so the reservation would be empty      -- BR-T7
+
+    -- Anonymize user check: deleted users can't make reservations
+    IF EXISTS (SELECT 1 FROM users WHERE user_id = p_user_id AND deleted_at IS NOT NULL) THEN
+        RAISE EXCEPTION 'User % is deleted and cannot make reservations', p_user_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- 2. Lock the event, then check it
+    SELECT status, starts_at, published_at INTO v_status, v_starts_at, v_published_at
+        FROM events
+        WHERE event_id = p_event_id
+        FOR SHARE; -- lock the event row to prevent changes while reserving (e.g. cancellation)
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Event % not found', p_event_id
+            USING ERRCODE = 'no_data_found';
+    END IF;
+
+    -- Verify is event is published & not started
+    IF v_status <> 'published' OR v_starts_at <= now() THEN                       -- BR-R2
+        RAISE EXCEPTION 'Event % is not available for reservation', p_event_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- 3. Insert the reservation; retry if the random code is already taken     -- BR-R3, D8
+    LOOP
+        BEGIN
+            INSERT INTO reservations (user_id, event_id, reference_code)
+                VALUES (p_user_id, p_event_id, gen_reference_code())
+            RETURNING reservation_id, reference_code INTO v_reservation_id, v_reference_code;
+            EXIT;                                                              -- inserted, leave the loop
+        EXCEPTION WHEN unique_violation THEN
+            -- code collision (very rare): loop and try a new one
+        END;
+    END LOOP;
+
+    -- 4. Each ticket type: lock, check, count, insert
+    FOR v_item IN
+        SELECT key::BIGINT AS ticket_type_id, value::INT AS quantity
+        FROM jsonb_each(p_items)
+        ORDER BY 1 -- Refers to the 1st column: ticket_type_id
+    LOOP
+        -- Data: v_item.ticket_type_id, v_item.quantity
+        SELECT price, quantity, off_sale_at, max_per_checkout, sales_start, sales_end 
+            INTO v_tt
+            FROM ticket_types
+            WHERE ticket_type_id = v_item.ticket_type_id AND event_id = p_event_id
+            FOR UPDATE; --  lock the ticket type row to prevent overselling while reserving
+
+        IF NOT FOUND THEN                                                      -- BR-R1: never another event's type
+            RAISE EXCEPTION 'Ticket type % does not exist for event %', v_item.ticket_type_id, p_event_id
+                USING ERRCODE = 'no_data_found';
+        END IF;
+
+        -- Verify if reservation is within the sales period: open from start (inclusive)  -- BR-R2, BR-T6
+        -- to end (exclusive); NULL start/end = published_at/starts_at; NULL off_sale_at = on sale
+        IF COALESCE(v_tt.sales_start, v_published_at) > now() OR COALESCE(v_tt.sales_end, v_starts_at) <= now() OR v_tt.off_sale_at <= now() THEN
+            RAISE EXCEPTION 'Ticket type % is not available for reservation', v_item.ticket_type_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+
+        -- Verify if quantity is within the allowed range
+        IF v_item.quantity < 1 OR v_item.quantity > v_tt.max_per_checkout THEN       -- BR-T7
+            RAISE EXCEPTION 'Quantity for ticket type % must be at least 1 and at most %', v_item.ticket_type_id, v_tt.max_per_checkout
+                USING ERRCODE = 'check_violation';
+        END IF;
+
+
+        SELECT count(*) INTO v_active
+            FROM tickets
+            WHERE ticket_type_id = v_item.ticket_type_id AND status = 'active';
+
+        -- Check the available tickets for this ticket type
+        IF v_active + v_item.quantity > v_tt.quantity THEN                     -- BR-T3, D4: counted under the lock
+            RAISE EXCEPTION 'Not enough tickets available for ticket type %', v_item.ticket_type_id
+                USING ERRCODE = 'check_violation';
+        END IF;
+        
+        -- create all tickets for this ticket type
+        INSERT INTO tickets (reservation_id, event_id, ticket_type_id, unit_price)
+            SELECT v_reservation_id, p_event_id, v_item.ticket_type_id, v_tt.price  -- price snapshot (BR-R7)
+            FROM generate_series(1, v_item.quantity);
+    END LOOP;
+
+    RETURN v_reference_code;
+END;
+$$;

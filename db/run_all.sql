@@ -1,5 +1,5 @@
 -- Rebuilds the eventbrite schema from scratch. Re-runnable.
---   psql -v ON_ERROR_STOP=1 -d eventbrite_lab -f db/run_all.sql   (from the repo root)
+--   psql -U postgres -v ON_ERROR_STOP=1 -d eventbrite_lab -f db/run_all.sql   (from the repo root)
 \set ON_ERROR_STOP on
 \echo '== reset'
 DROP SCHEMA IF EXISTS eventbrite CASCADE;

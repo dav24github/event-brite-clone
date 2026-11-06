@@ -410,3 +410,374 @@ WHERE event_id = (SELECT event_id FROM events WHERE title = '[Edge] No Sales Wor
 UPDATE events
    SET ends_at = starts_at + interval '30 minutes'
  WHERE title = '[Edge] No Sales Workshop';
+
+
+-- #############################################################################
+-- ticket_types, reservations, tickets, app functions
+-- Seed ids used below (deterministic: same on every run_all.sql):
+--   event 121 '[Edge] Sold Out Rooftop'   ticket types 239 'General' (5/5 sold), 240 'VIP' (0/10)
+--   event 122 '[Edge] No Sales Workshop'  ticket type  241 'General' (position 1, 0/50)
+--   event 123 '[Edge] Cancelled Concert'  ticket type  242 'General'
+--   reservation 3238 = user 1 on event 121 (confirmed)
+--   reservation 3239 = user 500 on event 121 (confirmed, code 'EBK-ME2USS', 3 tickets)
+--   reservation 3240 = user 600 on event 123 (cancelled by the event cancel)
+--   reservation 1501 = user 542 on past event 81 (confirmed, event already started)
+-- Run order matters: T98–T100 change ticket types 240 and 241, so they come last.
+-- #############################################################################
+
+
+-- =============================================================================
+-- ticket_types · CHECKs, UNIQUEs, FK
+-- Valid base row: event_id 122, name 'T<n>', quantity 10, position <n>.
+-- Leave price, max_per_checkout and the sales columns out unless the test names them.
+-- =============================================================================
+
+-- T53 · BR-T1 · name blank
+-- values: name '   '
+-- expect: ERROR ck_ticket_types_name_length
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (122, '   ', 10, 53);
+
+
+-- T54 · BR-T2 · quantity below 1
+-- values: quantity 0
+-- expect: ERROR ck_ticket_types_quantity_range
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (122, 'T54', 0, 54);
+
+
+-- T55 · BR-T2 · quantity above 100 000
+-- values: quantity 100001
+-- expect: ERROR ck_ticket_types_quantity_range
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (122, 'T55', 100001, 55);
+
+
+-- T56 · BR-T5 · paid ticket in v0
+-- values: price 5
+-- expect: ERROR ck_ticket_types_price_v0_only
+INSERT INTO ticket_types (event_id, name, quantity, position, price)
+    VALUES (122, 'T56', 10, 56, 5);
+
+
+-- T57 · BR-T5, D3 · negative price
+--       (-1 also breaks v0_only, but CHECKs run in name order: non_negative < v0_only)
+-- values: price -1
+-- expect: ERROR ck_ticket_types_price_non_negative
+INSERT INTO ticket_types (event_id, name, quantity, position, price)
+    VALUES (122, 'T57', 10, 57, -1);
+
+
+-- T58 · BR-T6 · sales_start after sales_end
+-- values: sales_start now() + interval '2 days', sales_end now() + interval '1 day'
+-- expect: ERROR ck_ticket_types_sales_start_before_end
+INSERT INTO ticket_types (event_id, name, quantity, position, sales_start, sales_end)
+    VALUES (122, 'T58', 10, 58, now() + interval '2 days', now() + interval '1 day');
+
+
+-- T59 · BR-T7 · max_per_checkout below 1
+-- values: max_per_checkout 0
+-- expect: ERROR ck_ticket_types_max_per_checkout_range
+INSERT INTO ticket_types (event_id, name, quantity, position, max_per_checkout)
+    VALUES (122, 'T59', 10, 59, 0);
+
+
+-- T60 · BR-T7 · max_per_checkout above 50
+-- values: max_per_checkout 51
+-- expect: ERROR ck_ticket_types_max_per_checkout_range
+INSERT INTO ticket_types (event_id, name, quantity, position, max_per_checkout)
+    VALUES (122, 'T60', 10, 60, 51);
+
+
+-- T61 · BR-T8 · position already used in the same event
+-- values: position 1 (241 'General' has it)
+-- expect: ERROR uq_ticket_types_position_per_event
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (122, 'T61', 10, 1);
+
+
+-- T62 · BR-T1 · name already used in the same event, different case
+-- values: name 'GENERAL', position 62
+-- expect: ERROR uq_ticket_types_event_name_lower
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (122, 'GENERAL', 10, 62);
+
+
+-- T63 · BR-T1 · event that doesn't exist
+-- values: event_id 999999
+-- expect: ERROR fk_ticket_types_event
+INSERT INTO ticket_types (event_id, name, quantity, position)
+    VALUES (999999, 'T63', 10, 63);
+
+
+
+-- =============================================================================
+-- ticket_types · triggers and delete
+-- =============================================================================
+
+-- T64 · BR-R1, D2 · move a ticket type to another event
+-- values: ticket_type_id 241, SET event_id = 121
+-- expect: ERROR trg_ticket_types_reject_change_event
+
+
+-- T65 · BR-T4, D4 · lower quantity below the active tickets
+-- values: ticket_type_id 239 (5 active), SET quantity = 4
+-- expect: ERROR trg_ticket_types_guard_quantity
+
+
+-- T66 · BR-T6, D6 · sales_end after the event ends (INSERT path)
+-- values: base row with sales_end now() + interval '60 days' (event 122 ends in ~37 days)
+-- expect: ERROR trg_ticket_types_guard_sales_end
+
+
+-- T67 · BR-T6, D6 · sales_end after the event ends (UPDATE path)
+-- values: ticket_type_id 241, SET sales_end = now() + interval '60 days'
+-- expect: ERROR trg_ticket_types_guard_sales_end
+
+
+-- T68 · BR-E6 · delete the last ticket type of a published event
+-- values: ticket_type_id 241 (event 122's only type)
+-- expect: ERROR trg_ticket_types_guard_delete
+
+
+-- T69 · BR-T9 · delete a ticket type that has tickets
+--       (event 121 has two types, so the last-type guard passes and the FK stops it)
+-- values: ticket_type_id 239
+-- expect: ERROR fk_tickets_ticket_type_event
+
+
+
+-- =============================================================================
+-- reservations
+-- Valid base row: user_id 500, event_id 122, reference_code <the test's code>.
+-- Direct INSERTs skip reserve_tickets(); that's fine, only the constraints are tested.
+-- =============================================================================
+
+-- T70 · BR-R3, D8 · reference_code already taken
+-- values: reference_code 'EBK-ME2USS' (reservation 3239)
+-- expect: ERROR reservations_reference_code_key
+INSERT INTO reservations (user_id, event_id, reference_code)
+    VALUES (500, 122, 'EBK-ME2USS');
+
+
+-- T71 · BR-R3, D8 · reference_code with characters outside the alphabet (0, O, I, L, 1)
+-- values: reference_code 'EBK-0OIL1A'
+-- expect: ERROR ck_reservations_reference_code_format
+INSERT INTO reservations (user_id, event_id, reference_code)
+    VALUES (500, 122, 'EBK-0OIL1A');
+
+
+-- T72 · BR-R5 · cancelled without cancelled_at
+-- values: reference_code 'EBK-TSTAAA', status 'cancelled'
+-- expect: ERROR ck_reservations_cancelled_at_iff_cancelled
+INSERT INTO reservations (user_id, event_id, reference_code, status)
+    VALUES (500, 122, 'EBK-TSTAAA', 'cancelled');
+
+
+-- T73 · BR-R1 · user that doesn't exist
+-- values: user_id 999999, reference_code 'EBK-TSTAAB'
+-- expect: ERROR fk_reservations_user
+INSERT INTO reservations (user_id, event_id, reference_code)
+    VALUES (999999, 122, 'EBK-TSTAAB');
+
+
+-- T74 · BR-R1 · event that doesn't exist
+-- values: event_id 999999, reference_code 'EBK-TSTAAC'
+-- expect: ERROR fk_reservations_event
+INSERT INTO reservations (user_id, event_id, reference_code)
+    VALUES (500, 999999, 'EBK-TSTAAC');
+
+
+-- T75 · BR-K5 · transfer a reservation to another user
+-- values: reservation_id 3239, SET user_id = 501
+-- expect: ERROR trg_reservations_reject_change_keys
+
+
+-- T76 · BR-R1, D2 · move a reservation to another event
+-- values: reservation_id 3239, SET event_id = 122
+-- expect: ERROR trg_reservations_reject_change_keys
+
+
+-- T77 · BR-R5 · reactivate a cancelled reservation
+-- values: reservation_id 3240, SET status = 'confirmed', cancelled_at = NULL
+-- expect: ERROR trg_reservations_no_reactivate
+
+
+-- T78 · BR-K4, D9 · delete a reservation
+-- values: reservation_id 3239
+-- expect: ERROR trg_reservations_no_delete
+
+
+
+-- =============================================================================
+-- tickets
+-- Valid base row: reservation_id 3239, ticket_type_id 240, event_id 121, unit_price 0.
+-- =============================================================================
+
+-- T79 · BR-R7, D3 · negative unit_price
+-- values: unit_price -1
+-- expect: ERROR ck_tickets_unit_price_non_negative
+INSERT INTO tickets (reservation_id, ticket_type_id, event_id, unit_price)
+    VALUES (3239, 240, 121, -1);
+
+
+-- T80 · BR-K3 · cancelled without cancelled_at
+-- values: status 'cancelled'
+-- expect: ERROR ck_tickets_cancelled_at_iff_cancelled
+INSERT INTO tickets (reservation_id, ticket_type_id, event_id, unit_price, status)
+    VALUES (3239, 240, 121, 0, 'cancelled');
+
+
+-- T81 · BR-K2, D8 · code already taken
+-- values: code = (SELECT code FROM tickets WHERE reservation_id = 3238 LIMIT 1)
+-- expect: ERROR tickets_code_key
+INSERT INTO tickets (reservation_id, ticket_type_id, event_id, unit_price, code)
+    VALUES (3239, 240, 121, 0, (SELECT code FROM tickets WHERE reservation_id = 3238 LIMIT 1));
+
+
+-- T82 · BR-R1, D2 · reservation from another event
+-- values: reservation_id 3240 (event 123), event_id 121
+-- expect: ERROR fk_tickets_reservation_event
+INSERT INTO tickets (reservation_id, ticket_type_id, event_id, unit_price)
+    VALUES (3240, 240, 121, 0);
+
+
+-- T83 · BR-R1, D2 · ticket type from another event
+-- values: ticket_type_id 241 (event 122), event_id 121
+-- expect: ERROR fk_tickets_ticket_type_event
+INSERT INTO tickets (reservation_id, ticket_type_id, event_id, unit_price)
+    VALUES (3239, 241, 121, 0);
+
+
+-- T84 · BR-K3 · reactivate a cancelled ticket
+-- values: tickets of reservation 3240, SET status = 'active', cancelled_at = NULL
+-- expect: ERROR trg_tickets_status_transition
+
+
+-- T85 · BR-R7 · change the price snapshot
+-- values: tickets of reservation 3239, SET unit_price = 1
+-- expect: ERROR trg_tickets_reject_change_keys
+
+
+-- T86 · BR-K2 · change the QR code
+-- values: tickets of reservation 3239, SET code = gen_random_uuid()
+-- expect: ERROR trg_tickets_reject_change_keys
+
+
+-- T87 · BR-K4, D9 · delete a ticket
+-- values: tickets of reservation 3239
+-- expect: ERROR trg_tickets_no_delete
+
+
+
+-- =============================================================================
+-- reserve_tickets(user_id, event_id, items)
+-- These RAISEs have no constraint name: expect is the SQLSTATE + message.
+-- Call it with SELECT reserve_tickets(...). items is JSON text, e.g. '{"241": 1}'.
+-- =============================================================================
+
+-- T88 · BR-T7 · no ticket types requested
+-- values: user 500, event 122, items '{}'
+-- expect: ERROR 23514 No tickets specified for reservation
+
+
+-- T89 · BR-U6 · anonymized user
+-- setup (succeeds): SELECT anonymize_user(900);
+-- values: user 900, event 122, items '{"241": 1}'
+-- expect: ERROR 23514 User 900 is deleted and cannot make reservations
+
+
+-- T90 · BR-R1 · event that doesn't exist
+-- values: user 500, event 999999, items '{"241": 1}'
+-- expect: ERROR P0002 Event 999999 not found
+
+
+-- T91 · BR-R2 · draft event
+-- values: user 500, event 2, items '{"241": 1}'
+-- expect: ERROR 23514 Event 2 is not available for reservation
+
+
+-- T92 · BR-R2, BR-E9 · cancelled event
+-- values: user 500, event 123, items '{"242": 1}'
+-- expect: ERROR 23514 Event 123 is not available for reservation
+
+
+-- T93 · BR-R2 · event already started
+-- values: user 500, event 81, items '{"241": 1}'
+-- expect: ERROR 23514 Event 81 is not available for reservation
+
+
+-- T94 · BR-R1 · ticket type of another event
+-- values: user 500, event 122, items '{"240": 1}' (240 belongs to event 121)
+-- expect: ERROR P0002 Ticket type 240 does not exist for event 122
+
+
+-- T95 · BR-T7 · quantity 0
+-- values: user 500, event 122, items '{"241": 0}'
+-- expect: ERROR 23514 Quantity for ticket type 241 must be at least 1 and at most 10
+
+
+-- T96 · BR-T7 · quantity above max_per_checkout (10)
+-- values: user 500, event 122, items '{"241": 11}'
+-- expect: ERROR 23514 Quantity for ticket type 241 must be at least 1 and at most 10
+
+
+-- T97 · BR-T3, D4 · sold out
+-- values: user 500, event 121, items '{"239": 1}'
+-- expect: ERROR 23514 Not enough tickets available for ticket type 239
+
+
+-- T98 · BR-R2, BR-T6 · sales haven't started
+-- setup (succeeds): ticket_type_id 240, SET sales_start = now() + interval '1 day'
+-- values: user 500, event 121, items '{"240": 1}'
+-- expect: ERROR 23514 Ticket type 240 is not available for reservation
+
+
+-- T99 · BR-R2, BR-T6 · sales already ended
+-- setup (succeeds): ticket_type_id 241, SET sales_end = now() - interval '1 hour'
+-- values: user 500, event 122, items '{"241": 1}'
+-- expect: ERROR 23514 Ticket type 241 is not available for reservation
+
+
+-- T100 · BR-T9 · ticket type taken off sale
+-- setup (succeeds): ticket_type_id 240, SET sales_start = NULL, off_sale_at = now()
+--   (clear sales_start so only off_sale_at can stop it)
+-- values: user 500, event 121, items '{"240": 1}'
+-- expect: ERROR 23514 Ticket type 240 is not available for reservation
+
+
+-- T101 · BR-R6 · every failed checkout above rolled back completely
+--       (a query, not a failing statement: count the reservations on event 122)
+-- expect: 0
+
+
+
+-- =============================================================================
+-- cancel_reservation(user_id, reservation_id)
+-- Call it with SELECT cancel_reservation(...).
+-- =============================================================================
+
+-- T102 · BR-R5 · cancel someone else's reservation
+-- values: user 501, reservation 3239 (belongs to user 500)
+-- expect: ERROR P0002 reservation 3239 not found for user 501
+
+
+-- T103 · BR-R5 · cancel a reservation that's already cancelled
+-- values: user 600, reservation 3240
+-- expect: ERROR 23514 Reservation: 3240 is already cancelled.
+
+
+-- T104 · BR-R5 · cancel after the event started
+-- values: user 542, reservation 1501 (event 81, in the past)
+-- expect: ERROR 23514 Reservation: 1501 can't be cancelled, the event has started.
+
+
+
+-- =============================================================================
+-- invariants (queries that must return 0 rows)
+-- =============================================================================
+
+-- T105 · 02-design denormalizations · ticket status matches its reservation's status (v0)
+--       (a ticket is cancelled exactly when its reservation is)
+-- expect: 0 rows
+

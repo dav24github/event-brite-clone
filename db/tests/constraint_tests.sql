@@ -697,6 +697,8 @@ SELECT reserve_tickets(500, 122, '{}');
 -- setup (succeeds): SELECT anonymize_user(900);
 -- values: user 900, event 122, items '{"241": 1}'
 -- expect: ERROR 23514 User 900 is deleted and cannot make reservations
+SELECT anonymize_user(900);
+SELECT reserve_tickets(900, 122, '{"241": 1}');
 
 
 -- T90 · BR-R1 · event that doesn't exist
@@ -751,12 +753,20 @@ SELECT reserve_tickets(500, 121, '{"239": 1}');
 -- setup (succeeds): ticket_type_id 240, SET sales_start = now() + interval '1 day'
 -- values: user 500, event 121, items '{"240": 1}'
 -- expect: ERROR 23514 Ticket type 240 is not available for reservation
+UPDATE ticket_types 
+	SET sales_start = now() + interval '1 day'
+WHERE ticket_type_id = 240;
+SELECT reserve_tickets(500, 121, '{"240": 1}');
 
 
 -- T99 · BR-R2, BR-T6 · sales already ended
 -- setup (succeeds): ticket_type_id 241, SET sales_end = now() - interval '1 hour'
 -- values: user 500, event 122, items '{"241": 1}'
 -- expect: ERROR 23514 Ticket type 241 is not available for reservation
+UPDATE ticket_types
+	SET sales_end = now() - interval '1 hour'
+WHERE ticket_types_id = 241;
+SELECT reserve_tickets(500, 121, '{"241": 1}');
 
 
 -- T100 · BR-T9 · ticket type taken off sale
@@ -764,11 +774,16 @@ SELECT reserve_tickets(500, 121, '{"239": 1}');
 --   (clear sales_start so only off_sale_at can stop it)
 -- values: user 500, event 121, items '{"240": 1}'
 -- expect: ERROR 23514 Ticket type 240 is not available for reservation
+UPDATE ticket_types
+	SET sales_start = NULL, off_sale_at = now()
+WHERE ticket_type_id = 240;
+SELECT reserve_tickets(500, 121, '{"240": 1}');
 
 
 -- T101 · BR-R6 · every failed checkout above rolled back completely
 --       (a query, not a failing statement: count the reservations on event 122)
 -- expect: 0
+SELECT count(*) FROM reservations WHERE event_id = 122;
 
 
 
@@ -803,4 +818,9 @@ SELECT cancel_reservation(542, 1501);
 -- T105 · 02-design denormalizations · ticket status matches its reservation's status (v0)
 --       (a ticket is cancelled exactly when its reservation is)
 -- expect: 0 rows
+SELECT count(*) 
+	FROM tickets t
+       JOIN reservations r
+	USING (reservation_id)
+WHERE t.status::text <> r.status::text;
 

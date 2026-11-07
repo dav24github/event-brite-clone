@@ -518,7 +518,7 @@ INSERT INTO ticket_types (event_id, name, quantity, position)
 -- T64 · BR-R1, D2 · move a ticket type to another event
 -- values: ticket_type_id 241, SET event_id = 121
 -- expect: ERROR trg_ticket_types_reject_change_event
-
+UPDATE ticket_types SET event_id = 121 WHERE ticket_type_id = 241;
 
 -- T65 · BR-T4, D4 · lower quantity below the active tickets
 -- values: ticket_type_id 239 (5 active), SET quantity = 4

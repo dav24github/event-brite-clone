@@ -765,8 +765,8 @@ SELECT reserve_tickets(500, 121, '{"240": 1}');
 -- expect: ERROR 23514 Ticket type 241 is not available for reservation
 UPDATE ticket_types
 	SET sales_end = now() - interval '1 hour'
-WHERE ticket_types_id = 241;
-SELECT reserve_tickets(500, 121, '{"241": 1}');
+WHERE ticket_type_id = 241;
+SELECT reserve_tickets(500, 122, '{"241": 1}');
 
 
 -- T100 · BR-T9 · ticket type taken off sale
@@ -818,9 +818,9 @@ SELECT cancel_reservation(542, 1501);
 -- T105 · 02-design denormalizations · ticket status matches its reservation's status (v0)
 --       (a ticket is cancelled exactly when its reservation is)
 -- expect: 0 rows
-SELECT count(*) 
+SELECT t.ticket_id, t.status, r.reservation_id, r.status
 	FROM tickets t
        JOIN reservations r
 	USING (reservation_id)
-WHERE t.status::text <> r.status::text;
-
+WHERE (t.status = 'cancelled' AND r.status <> 'cancelled')
+   OR (t.status = 'active' AND r.status <> 'confirmed');

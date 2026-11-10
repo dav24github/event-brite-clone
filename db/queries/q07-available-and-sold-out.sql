@@ -16,3 +16,43 @@
 -- Run on a fresh run_all.sql.
 
 SET search_path TO eventbrite;
+
+WITH a AS ( 
+-- Version A: LEFT JOIN tickets + GROUP BY
+        SELECT e.title,
+                tt.name AS ticket_type,
+                tt.quantity,
+                GREATEST(tt.quantity - COUNT(at.ticket_id), 0) AS available,
+                (GREATEST(tt.quantity - COUNT(at.ticket_id), 0) = 0) AS sold_out
+        FROM events e
+        JOIN ticket_types tt ON e.event_id = tt.event_id
+        LEFT JOIN tickets at ON tt.ticket_type_id = at.ticket_type_id AND at.status = 'active'
+        WHERE e.organizer_id = 2
+        GROUP BY e.title, tt.name, tt.quantity, tt.position
+        ORDER BY e.title, tt.position
+),
+b AS ( 
+-- Version B: correlated subquery per ticket type
+        SELECT e.title,
+                tt.name AS ticket_type,
+                tt.quantity,
+                GREATEST(tt.quantity - (
+                SELECT COUNT(*)
+                FROM tickets t
+                WHERE t.ticket_type_id = tt.ticket_type_id
+                AND t.status = 'active'
+                ), 0) AS available,
+                (GREATEST(tt.quantity - (
+                SELECT COUNT(*)
+                FROM tickets t
+                WHERE t.ticket_type_id = tt.ticket_type_id
+                AND t.status = 'active'
+                ), 0) = 0) AS sold_out
+        FROM events e
+        JOIN ticket_types tt ON e.event_id = tt.event_id
+        WHERE e.organizer_id = 2
+        ORDER BY e.title, tt.position 
+)
+(SELECT * FROM a EXCEPT SELECT * FROM b)
+UNION ALL
+(SELECT * FROM b EXCEPT SELECT * FROM a);      -- expect 0 rows

@@ -22,3 +22,22 @@
 
 SET search_path TO eventbrite;
 
+WITH at AS (    
+    SELECT 
+        tt.event_id,
+        tt.ticket_type_id, 
+        tt.quantity, 
+        GREATEST(COUNT(*) FILTER (WHERE t.status = 'active'), 0) as active_tickets
+    FROM ticket_types tt
+    LEFT JOIN tickets t USING (ticket_type_id)
+    GROUP BY tt.event_id, tt.ticket_type_id, tt.quantity
+)
+SELECT e.title, 
+        SUM(at.active_tickets) as active_tickets, 
+        SUM(at.quantity) as quantity, 
+        ROUND(100.0 * SUM(at.active_tickets) / SUM(at.quantity), 1) as sell_through_pct
+FROM at
+JOIN events e ON e.event_id = at.event_id
+WHERE e.organizer_id = 2
+GROUP BY e.title
+ORDER BY sell_through_pct DESC, e.title;

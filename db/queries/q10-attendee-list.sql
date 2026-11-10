@@ -14,3 +14,10 @@
 
 SET search_path TO eventbrite;
 
+SELECT u.full_name, u.email, COUNT(*) as tickets
+FROM tickets t
+JOIN reservations r ON r.reservation_id = t.reservation_id AND t.status = 'active'
+JOIN users u ON u.user_id = r.user_id 
+WHERE r.event_id = 121
+GROUP BY u.full_name, u.email
+ORDER BY tickets DESC, full_name;

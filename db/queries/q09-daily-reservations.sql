@@ -7,12 +7,24 @@
 --           local_day = (reservations.created_at AT TIME ZONE events.timezone)::date
 -- Filter:   reservations.event_id = 81 (count every reservation, cancelled ones too: they were made that day)
 -- Sort:     local_day
--- Expected: 9 rows, 18 reservations in total · busiest day has 4
---           (the dates move with the day you run run_all.sql: the seed dates are relative to now())
--- Try:      group by created_at::date instead (the server's zone): a reservation made late
---           at night can land on a different day. That's the bug BR-M4 prevents.
+-- Expected: 18 reservations in total (the sum of the column), over about 9–10 days
+--           Only the total is fixed: the seed times are relative to now(), so each run_all.sql
+--           shifts them by hours, and a reservation near Madrid's midnight can move to the next day.
+-- Try:      group by created_at::date instead. That takes the date on the SERVER's clock (UTC-4),
+--           not Madrid's. A reservation made at 01:33 on May 27 in Madrid is 19:33 on May 26
+--           on the server, so it's counted on the 26th: the organizer's chart is a day off.
+--           BR-M4 requires the event's time zone exactly so this doesn't happen.
 -- Next:     4.1 adds a running total to this query with SUM(...) OVER (ORDER BY local_day).
 -- Run on a fresh run_all.sql.
 
 SET search_path TO eventbrite;
 
+SELECT 
+    (r.created_at AT TIME ZONE e.timezone)::date AS local_day, 
+    COUNT(*) AS reservations,
+    SUM(COUNT(*)) OVER (ORDER BY (r.created_at AT TIME ZONE e.timezone)::date) AS running_total
+FROM reservations r
+JOIN events e USING (event_id)
+WHERE r.event_id = 81
+GROUP BY local_day
+ORDER BY  local_day;

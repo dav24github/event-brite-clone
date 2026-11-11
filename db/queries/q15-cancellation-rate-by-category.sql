@@ -19,7 +19,7 @@ SELECT c.category_id,
 		c.name AS category, 
 		SUM(cte.tickets) AS tickets, 
 		SUM(cte.cancelled_tickets) AS cancelled, 
-		round(100 * SUM(cte.cancelled_tickets) / NULLIF(SUM(cte.tickets), 0), 1) AS cancel_pct
+		round(100.0 * SUM(cte.cancelled_tickets) / NULLIF(SUM(cte.tickets), 0), 1) AS cancel_pct
 FROM categories c
 LEFT JOIN (
     SELECT e.event_id, 
@@ -33,3 +33,14 @@ LEFT JOIN (
 ON cte.category_id = c.category_id
 GROUP BY c.category_id, c.name 
 ORDER BY cancel_pct DESC NULLS LAST, category
+
+-- SELECT c.category_id, c.name AS category,
+--        COUNT(t.ticket_id) AS tickets,
+--        COUNT(t.ticket_id) FILTER (WHERE t.status = 'cancelled') AS cancelled,
+--        round(100.0 * COUNT(t.ticket_id) FILTER (WHERE t.status = 'cancelled')
+--              / NULLIF(COUNT(t.ticket_id), 0), 1) AS cancel_pct
+-- FROM categories c
+-- LEFT JOIN events e  ON e.category_id = c.category_id
+-- LEFT JOIN tickets t ON t.event_id = e.event_id
+-- GROUP BY c.category_id, c.name
+-- ORDER BY cancel_pct DESC NULLS LAST, category;

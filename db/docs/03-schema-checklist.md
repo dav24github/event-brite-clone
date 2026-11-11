@@ -55,7 +55,7 @@ A rule that spans tables is listed under each table it touches.
 - [x] `name` nn uq, not blank ck · BR-C1
 - [x] `slug` nn uq, `^[a-z0-9]+(-[a-z0-9]+)*$` ck · BR-C1
 - [x] can't delete if used · fk RESTRICT on `events.category_id` · BR-C3
-- [ ] reference rows (10 categories) · `seed.sql` · BR-C1
+- [x] reference rows (10 categories) · `seed.sql` · BR-C1
 
 ### venues
 
@@ -82,7 +82,7 @@ A rule that spans tables is listed under each table it touches.
 - [x] description, category and complete location required unless draft ck · BR-E6, BR-C2, BR-L4
 - [x] on publish: `starts_at > now()` and ≥ 1 ticket type · trg BEFORE UPDATE · BR-E6, D5
 - [x] `published_at` set iff not draft ck · BR-E6
-- [ ] draft only visible to its organizer; browse = published + upcoming · app / queries · BR-E7
+- [x] draft only visible to its organizer; browse = published + upcoming · app / queries · BR-E7
 - [x] delete only while `published_at IS NULL` · trg BEFORE DELETE · BR-E8, D9
 - [x] `cancelled_at` set iff cancelled ck · BR-E9
 - [x] `cancellation_reason` varchar(500) · BR-E9
@@ -114,7 +114,7 @@ A rule that spans tables is listed under each table it touches.
 - [x] `price = 0` ck (v0 only, dropped in v1) · BR-T5
 - [x] `sales_start`, `sales_end` nullable; `sales_end > sales_start` ck · BR-T6
 - [x] `sales_end <= events.ends_at` · trg · BR-T6, D6
-- [ ] defaults resolved at read time: `COALESCE(sales_start, published_at)`, `COALESCE(sales_end, starts_at)` · queries/fn · BR-T6, D6
+- [x] defaults resolved at read time: `COALESCE(sales_start, published_at)`, `COALESCE(sales_end, starts_at)` · queries/fn · BR-T6, D6
 - [x] `max_per_checkout` int nn def 10, 1–50 ck · BR-T7
 - [x] `position` int nn, uq `(event_id, position)` · BR-T8
 - [x] `off_sale_at` nullable · BR-T9
@@ -148,7 +148,7 @@ A rule that spans tables is listed under each table it touches.
 - [x] `cancelled_at` set iff cancelled ck · BR-K3
 - [x] cancelled never becomes active again · trg BEFORE UPDATE · BR-K3
 - [x] `code`, `unit_price`, `reservation_id`, `ticket_type_id`, `event_id` immutable · trg · BR-K2, BR-R7, D2
-- [ ] ticket status matches reservation status (v0) · test · 02-design denormalizations
+- [x] ticket status matches reservation status (v0) · test · 02-design denormalizations
 - [x] never deleted · trg BEFORE DELETE raises · BR-K4, D9
 - [x] owner = reservation's user (no own user column) · design · BR-K5
 
@@ -174,5 +174,5 @@ A rule that spans tables is listed under each table it touches.
 
 ## 7. Coverage check
 
-- [ ] every BR-ID in `01-business-rules.md` appears in `schema.sql`, `tests/constraint_tests.sql`, or as `app` above
-- [ ] BR-M1–M6 are query definitions only; they belong in `queries/`
+- [x] every BR-ID in `01-business-rules.md` appears in `schema.sql`, `tests/constraint_tests.sql`, or as `app` above
+- [x] BR-M1–M6 are query definitions only; they belong in `queries/`

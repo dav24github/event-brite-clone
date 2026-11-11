@@ -27,4 +27,8 @@ GROUP BY effective_status
 ORDER BY effective_status;
 
 -- queary B
-
+SELECT event_id, title, ends_at
+FROM events
+WHERE status = 'published'
+    AND ends_at < now()
+ORDER BY ends_at;

@@ -18,3 +18,38 @@
 
 SET search_path TO eventbrite;
 
+-- Query A · how many users never reserved → 183
+SELECT COUNT(*) AS never_reserved
+FROM users u
+WHERE u.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM reservations r
+                  WHERE r.user_id = u.user_id);
+
+
+-- Query B · the list → 183 rows, first user_id 154
+SELECT u.user_id, u.full_name, u.created_at
+FROM users u
+WHERE u.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM reservations r
+                  WHERE r.user_id = u.user_id)
+ORDER BY u.user_id;
+
+
+-- Verify 
+WITH version_a AS (
+    SELECT u.user_id
+    FROM users u
+    WHERE u.deleted_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM reservations r
+                      WHERE r.user_id = u.user_id)
+),
+version_b AS (
+    SELECT u.user_id
+    FROM users u
+    LEFT JOIN reservations r ON r.user_id = u.user_id
+    WHERE u.deleted_at IS NULL
+      AND r.reservation_id IS NULL
+)
+(SELECT user_id FROM version_a EXCEPT SELECT user_id FROM version_b)
+UNION ALL
+(SELECT user_id FROM version_b EXCEPT SELECT user_id FROM version_a);

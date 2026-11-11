@@ -15,3 +15,21 @@
 
 SET search_path TO eventbrite;
 
+SELECT c.category_id,
+		c.name AS category, 
+		SUM(cte.tickets) AS tickets, 
+		SUM(cte.cancelled_tickets) AS cancelled, 
+		round(100 * SUM(cte.cancelled_tickets) / NULLIF(SUM(cte.tickets), 0), 1) AS cancel_pct
+FROM categories c
+LEFT JOIN (
+    SELECT e.event_id, 
+			e.category_id, 
+			COUNT(t.ticket_id) FILTER (WHERE t.status = 'cancelled') AS cancelled_tickets,
+			COUNT(t.ticket_id) AS tickets
+	FROM events e
+	JOIN tickets t USING (event_id)
+	GROUP BY e.event_id, e.category_id 
+) AS cte
+ON cte.category_id = c.category_id
+GROUP BY c.category_id, c.name 
+ORDER BY cancel_pct DESC NULLS LAST, category

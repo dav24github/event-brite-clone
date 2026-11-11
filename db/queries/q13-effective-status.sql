@@ -15,3 +15,16 @@
 
 SET search_path TO eventbrite;
 
+-- queary A
+SELECT CASE
+	WHEN status = 'published' AND ends_at < now()
+	THEN 'completed'
+	ELSE status::text  
+	END AS effective_status, 
+	COUNT(*) AS events
+FROM events
+GROUP BY effective_status
+ORDER BY effective_status;
+
+-- queary B
+

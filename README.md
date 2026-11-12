@@ -2,13 +2,13 @@
 
 An event-ticketing platform. Organizers create events and sell tickets; attendees discover events and get digital tickets. It's my main full-stack project, and I build it one milestone at a time.
 
-> **Status:** restarted on 2026-10-01, database-first. Milestone **M1 (database)** is in progress.
+> **Status:** restarted on 2026-10-01, database-first. Milestone **M1 (database)** is in progress: the schema, seed data, constraint tests and business queries are done ([db/](db/README.md)); the performance and concurrency labs are next.
 
 ## Milestones
 
 | # | Milestone | Status |
 | --- | --- | --- |
-| M1 | Database: business rules, ERD, PostgreSQL schema, seed data, queries, constraint tests, performance and concurrency labs | in progress |
+| M1 | Database: business rules, ERD, PostgreSQL schema, seed data, queries, constraint tests, performance and concurrency labs | in progress: schema, seed, tests and queries done |
 | M2 | Core API (NestJS): events, ticket types, auth and roles, concurrency-safe reservations, tests, CI | planned |
 | M3 | MVP live: Next.js frontend, end-to-end tests, Docker, CI/CD, monitoring | planned |
 | M4 | Paid tickets: Stripe, webhooks, background jobs, emails with QR tickets | planned |

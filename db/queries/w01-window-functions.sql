@@ -141,4 +141,19 @@ ORDER BY category, rnk;;
 -- Watch:    "previous row" is not "yesterday": days with no reservations have no row,
 --           so LAG compares with the last day that HAD sales.
 -- Try:      LEAD(reservations) OVER (ORDER BY local_day) = the NEXT row's value
-
+WITH per_day AS (
+    SELECT (r.created_at AT TIME ZONE e.timezone)::date AS local_day,
+	COUNT(*) AS reservations
+FROM reservations r
+JOIN events e USING (event_id)
+WHERE r.event_id = 81
+GROUP BY local_day
+)
+SELECT local_day, reservations, 
+	LAG(reservations) OVER (ORDER BY local_day) AS previous_day,
+	CASE WHEN  reservations - LAG(reservations) OVER (ORDER BY local_day) > 0
+	THEN 'more'
+	ELSE 'fewer'
+	END AS change
+FROM per_day
+ORDER BY local_day;

@@ -151,9 +151,11 @@ GROUP BY local_day
 )
 SELECT local_day, reservations, 
 	LAG(reservations) OVER (ORDER BY local_day) AS previous_day,
-	CASE WHEN  reservations - LAG(reservations) OVER (ORDER BY local_day) > 0
-	THEN 'more'
-	ELSE 'fewer'
+	CASE
+        WHEN LAG(reservations) OVER (ORDER BY local_day) IS NULL THEN NULL
+        WHEN  reservations > LAG(reservations) OVER (ORDER BY local_day) THEN 'more'
+        WHEN  reservations < LAG(reservations) OVER (ORDER BY local_day) THEN 'fewer'
+        ELSE 'same'
 	END AS change
 FROM per_day
 ORDER BY local_day;

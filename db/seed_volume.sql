@@ -42,9 +42,9 @@
 --   * random() must be called per row. If you compute a value in a CTE and
 --     join it back, check you didn't give every row the same number.
 --
--- Expected (section 6), roughly:
---   users ~51,000 · organizers ~1,025 · events ~50,123 · ticket_types ~100,000
---   reservations 150k-300k · tickets 500k-1M · whole file under 2 minutes
+-- Expected (section 6):
+--   users 51,000 · organizers 1,025 · events 50,123 · ticket_types 100,406
+--   reservations 304,075 · tickets 759,426 · whole file 89,130.712 ms (approximately 1 minute and 29.13 seconds)
 -- =============================================================================
 
 
@@ -437,7 +437,7 @@ SELECT 'b. ticket event mismatch' AS check, count(*) AS bad
         OR t.event_id <> tt.event_id;
 
 -- c
-SELECT 'c. ticket types with more active tickets than quantity', count(*) as bad
+SELECT 'c. ticket types with more active tickets than quantity' AS check, count(*) as bad
     FROM (
         SELECT tt.ticket_type_id
         FROM ticket_types tt

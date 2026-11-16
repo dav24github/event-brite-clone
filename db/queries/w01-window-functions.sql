@@ -159,3 +159,46 @@ SELECT local_day, reservations,
 	END AS change
 FROM per_day
 ORDER BY local_day;
+
+-- -----------------------------------------------------------------------------
+-- W5 · every day, including days with no reservations         builds on W1, W4
+-- -----------------------------------------------------------------------------
+-- Question: Day by day for event 81, from its first reservation to its last,
+--           how many reservations, with 0 on the days that had none?
+-- Concept:  WITH RECURSIVE = a CTE that refers to itself, to generate rows:
+--             WITH RECURSIVE days AS (
+--                 <anchor: the first row>
+--                 UNION ALL
+--                 <recursive part: the next row, built FROM days>
+--                 WHERE <a stop condition>
+--             )
+--           Postgres runs the anchor once, then the recursive part on the rows
+--           it just produced, again and again until it produces none.
+-- Rules:    BR-M4 (days in the event's time zone)
+-- Input:    event_id 81
+-- Output:   local_day, reservations (0 if none), running_total
+-- Sort:     local_day
+-- Steps:    1. CTE per_day: your W1 per-day counts
+--           2. CTE days (RECURSIVE):
+--                anchor:    SELECT min(local_day) AS d FROM per_day
+--                recursive: SELECT d + 1 FROM days
+--                           WHERE d < (SELECT max(local_day) FROM per_day)
+--              (date + integer = date: d + 1 is the next day)
+--           3. FROM days LEFT JOIN per_day ON per_day.local_day = days.d
+--              reservations = COALESCE(per_day.reservations, 0)
+--              running_total = SUM(...) OVER (ORDER BY d)
+--           4. Version B: replace the recursive CTE with
+--                SELECT generate_series(min(local_day), max(local_day),
+--                                       interval '1 day')::date AS d FROM per_day
+--              and check both give the same rows with EXCEPT (as in Q11).
+-- Watch:    * WITH RECURSIVE goes at the start of the WITH, even if the recursive
+--             CTE isn't the first one (WITH RECURSIVE per_day AS (...), days AS (...)).
+--           * Forget the stop condition and it never ends: Ctrl+C.
+--           * SUM over COALESCE(..., 0), not over the NULL: the running total
+--             must stay flat on empty days, not disappear.
+-- Expected: (last day - first day + 1) rows, more than W1's · some rows with 0
+--           · running_total never goes down, flat on the 0 days · the last row is 18
+-- Why both: generate_series is the everyday tool for this. Recursive CTEs are
+--           for what generate_series can't do: walking a tree or a chain
+--           (categories inside categories, "who referred whom"), where each row
+--           depends on the one before it.

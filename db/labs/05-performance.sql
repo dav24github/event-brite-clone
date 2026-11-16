@@ -1,0 +1,238 @@
+-- =============================================================================
+-- labs/05-performance.sql · indexes and EXPLAIN ANALYZE (S01 step 4.2)
+-- 5 access patterns + 2 extras, each: plan BEFORE -> index -> plan AFTER.
+-- The results go in docs/05-performance.md. This file is the lab notebook.
+--
+-- Run in eventbrite_perf, after run_all.sql + seed_volume.sql:
+--   psql -U postgres -d eventbrite_perf
+--   then paste ONE block at a time (don't run the whole file with -f:
+--   you need to read each plan before going on)
+--
+-- How to measure, for every query:
+--   * EXPLAIN (ANALYZE, BUFFERS) <query>;
+--     ANALYZE really runs the query; BUFFERS shows pages touched
+--     (shared hit = from memory, read = from disk). Pages are the honest
+--     before/after number: time is noisy.
+--   * Run it TWICE and keep the second run (warm cache). Say so in the doc.
+--   * Copy only the lines that matter into the doc: the top node's time,
+--     each scan node (type, rows estimated vs actual, Buffers), any Sort.
+--
+-- "Before" for an index that already exists in schema.sql:
+--     BEGIN;
+--     DROP INDEX idx_...;
+--     EXPLAIN (ANALYZE, BUFFERS) ...;
+--     ROLLBACK;                    -- DDL is transactional: the index is back
+--   (DROP INDEX locks the table until ROLLBACK: fine in a lab, never in prod.)
+--
+-- A new index you're trying: CREATE INDEX ..., EXPLAIN, and if it doesn't
+-- win, DROP INDEX. The ones that win go into schema.sql at the end (last block).
+--
+-- Reading a plan, in order:
+--   1. the scan on each table: Seq Scan / Index Scan / Index Only Scan /
+--      Bitmap Index Scan + Bitmap Heap Scan
+--   2. rows=estimated vs actual rows: far apart = bad statistics (ANALYZE?)
+--   3. "Rows Removed by Filter": rows read just to be thrown away
+--   4. Sort nodes: an index in the right order can remove them
+--   5. Buffers on the top node: total pages
+-- =============================================================================
+
+SET search_path TO eventbrite;
+\timing on
+-- Optional: plans without parallel workers are easier to read the first time.
+-- SET max_parallel_workers_per_gather = 0;
+
+
+-- -----------------------------------------------------------------------------
+-- 0. Pick the test values                                    (once, at the start)
+-- -----------------------------------------------------------------------------
+-- Use real ids from the volume data, saved with \gset (as in seed_volume.sql):
+--   a. the organizer with the most events     -> :org_id
+--   b. the user with the most reservations    -> :user_id
+--   c. a word that is in some titles but not most of them -> :'word'
+--      (count it: SELECT count(*) FROM events WHERE title ILIKE '%word%')
+-- Shape:   SELECT organizer_id AS org_id FROM events
+--          GROUP BY organizer_id ORDER BY count(*) DESC LIMIT 1 \gset
+-- Watch:   if seed_volume.sql gave every event one of only 12 titles, any word
+--          matches ~1/12 of the table and pattern 5 can't show anything:
+--          make titles more varied there first (e.g. title || ' ' || city || ' ' || i).
+
+
+-- -----------------------------------------------------------------------------
+-- P1 · Browse published, upcoming events                         builds on Q01
+-- -----------------------------------------------------------------------------
+-- Question: How fast is the home page list, and how fast is page 500 of it?
+-- Concept:  partial index · index order removes a Sort · keyset vs OFFSET
+-- Steps:    1. BEFORE: EXPLAIN your Q01 as it is.
+--              Expect: Seq Scan on events with most rows removed by the filter.
+--              Also look at the derived table `at`: it counts the active tickets
+--              of EVERY ticket type in the platform before joining. Note its Buffers.
+--           2. INDEX: CREATE INDEX idx_events_published_starts
+--                       ON events (starts_at, event_id) WHERE status = 'published';
+--              Re-run Q01's EXPLAIN.
+--              Why partial: drafts, completed and cancelled events are never browsed.
+--              Why not "WHERE starts_at > now()" in the index: an index predicate
+--              must be IMMUTABLE and now() isn't. Try it and read the error.
+--           3. PAGINATION: the browse API returns 20 rows at a time. Write two
+--              versions of "page 500" on events only (no joins):
+--                OFFSET: WHERE status = 'published' AND starts_at > now()
+--                        ORDER BY starts_at, event_id LIMIT 20 OFFSET 10000
+--                keyset: same WHERE plus
+--                        AND (starts_at, event_id) > (<last starts_at>, <last event_id>)
+--                        ORDER BY starts_at, event_id LIMIT 20
+--                        (get the "last" values by running the OFFSET query with
+--                         OFFSET 9980 LIMIT 20 and taking its last row)
+--              EXPLAIN both. Compare actual rows on the index scan.
+--           4. Try (optional): rewrite `at` as a LEFT JOIN LATERAL that counts
+--              only the ticket types of the events on the page.
+-- Watch:    event_id is in the index and the ORDER BY so that ties on starts_at
+--           have a fixed order: keyset needs a unique sort key.
+-- Expected: after step 2, an Index Scan or Bitmap scan on the new index instead
+--           of the Seq Scan. Step 3: OFFSET reads ~10,020 index entries to return
+--           20; keyset reads ~20. Keyset stays flat on any page, OFFSET grows.
+
+
+-- -----------------------------------------------------------------------------
+-- P2 · An organizer's events                                     builds on Q05
+-- -----------------------------------------------------------------------------
+-- Question: How fast is the organizer dashboard, sorted by date?
+-- Concept:  composite index · column order · an index can replace a Sort
+-- Watch:    Q05 has a typo: "GROUP BY status;" then "ORDER BY status" on the next
+--           line. The ; ends the statement and ORDER BY alone is an error. Fix it.
+-- Steps:    use Q05's first query with organizer_id = :org_id
+--           1. BEFORE (no index): BEGIN; DROP INDEX idx_events_organizer; EXPLAIN; ROLLBACK;
+--              Expect: Seq Scan on events.
+--           2. With the existing idx_events_organizer (organizer_id): EXPLAIN.
+--              Expect: Bitmap or Index Scan, then a Sort node for ORDER BY starts_at.
+--           3. CREATE INDEX idx_events_organizer_starts ON events (organizer_id, starts_at);
+--              EXPLAIN. Expect: Index Scan, NO Sort (the index is already in order).
+--           4. Column order: DROP it, CREATE one on (starts_at, organizer_id), EXPLAIN.
+--              Why is it much worse? (Think of a phone book sorted by first name
+--              when you're looking for a last name.) Drop it.
+-- Decide:   if (organizer_id, starts_at) wins, it REPLACES idx_events_organizer:
+--           its leading column already serves the FK and "WHERE organizer_id = ".
+--           Two indexes doing one job = double the write cost.
+
+
+-- -----------------------------------------------------------------------------
+-- P3 · My tickets                                                builds on Q03
+-- -----------------------------------------------------------------------------
+-- Question: How fast is "my tickets" for the user with the most reservations?
+-- Concept:  FK columns are not indexed automatically · covering index (INCLUDE)
+--           · index-only scan and the visibility map
+-- Steps:    1. Q03 with user_id = :user_id.
+--              BEFORE: BEGIN; DROP INDEX idx_reservations_user; EXPLAIN; ROLLBACK;
+--              then EXPLAIN with it. Note which index tickets is read with
+--              (idx_tickets_reservation).
+--           2. Covering, on a narrower query, "my reservations list":
+--                SELECT reservation_id, event_id, status, created_at
+--                  FROM reservations WHERE user_id = :user_id;
+--              EXPLAIN it, then
+--                CREATE INDEX idx_reservations_user_cover ON reservations (user_id)
+--                  INCLUDE (event_id, status, created_at);
+--              EXPLAIN again. Look for "Index Only Scan" and "Heap Fetches".
+--           3. If Heap Fetches is high, run VACUUM reservations; and EXPLAIN again.
+-- Watch:    an Index Only Scan still visits the table for rows it can't prove
+--           are visible to everyone. VACUUM updates the visibility map, which is
+--           what lets it skip them. A fresh bulk-loaded table has none set.
+-- Decide:   is the covering index worth a second index on user_id? (It would
+--           replace idx_reservations_user, but it's wider: more write cost.)
+
+
+-- -----------------------------------------------------------------------------
+-- P4 · Sales report for an organizer                              builds on Q08
+-- -----------------------------------------------------------------------------
+-- Question: How fast is the sell-through report for the busiest organizer?
+-- Concept:  the query's shape decides whether an index CAN be used
+-- Steps:    1. BEFORE: Q08 with organizer_id = :org_id. Look at the CTE: it
+--              groups EVERY ticket type and EVERY ticket in the platform, and only
+--              then the outer query keeps one organizer's events. Note the Buffers.
+--           2. Rewrite 1: move the organizer filter INTO the CTE
+--              (JOIN events there, WHERE e.organizer_id = :org_id). EXPLAIN.
+--           3. Rewrite 2: the partial index idx_tickets_active_by_type only has
+--              active tickets, but COUNT(*) FILTER (WHERE status = 'active') reads
+--              all tickets first. Put the condition in the LEFT JOIN's ON
+--              (t.status = 'active') and use COUNT(t.ticket_id). EXPLAIN.
+--              (Same result: check with EXCEPT, as in Q11.)
+--           4. Only now: is any index still missing? Usually not.
+-- Watch:    no new index here may be the right answer. "The query was the
+--           problem, not the index" is a valid, interview-worthy finding.
+
+
+-- -----------------------------------------------------------------------------
+-- P5 · Title search                                                 (new query)
+-- -----------------------------------------------------------------------------
+-- Question: How fast is searching events by a word in the title?
+-- Concept:  why a B-tree can't help '%word%' · trigram GIN index
+-- Query:    SELECT event_id, title, starts_at FROM events
+--            WHERE status = 'published' AND title ILIKE '%' || :'word' || '%'
+--            ORDER BY starts_at LIMIT 20;
+-- Steps:    1. BEFORE: EXPLAIN. Expect: Seq Scan.
+--           2. CREATE INDEX on events (title); EXPLAIN. Still a Seq Scan: a B-tree
+--              is sorted by the START of the string, and '%word' has no start.
+--              (It would help 'word%' only, and only with text_pattern_ops or a
+--              C collation.) Drop it.
+--           3. CREATE EXTENSION IF NOT EXISTS pg_trgm;
+--              CREATE INDEX idx_events_title_trgm ON events USING gin (title gin_trgm_ops);
+--              EXPLAIN. Expect: Bitmap Index Scan on the trigram index.
+--           4. Try: a common word vs a rare one. With a common word the planner may
+--              go back to a Seq Scan: that's correct, not a bug.
+-- Watch:    a trigram index splits text into 3-letter pieces ('jaz', 'azz').
+--           Search words shorter than 3 letters can't use it.
+
+
+-- -----------------------------------------------------------------------------
+-- E1 · Sargable predicates                                       builds on Q09
+-- -----------------------------------------------------------------------------
+-- Question: "Reservations created yesterday": why does one way of writing it use
+--           an index and the other doesn't?
+-- Concept:  sargable = the column stands alone on one side of the comparison
+-- Steps:    1. CREATE INDEX idx_reservations_created ON reservations (created_at);
+--           2. EXPLAIN both:
+--                A: WHERE created_at::date = current_date - 1
+--                B: WHERE created_at >= current_date - 1 AND created_at < current_date
+--              A wraps the column in a cast, so the index on created_at can't be
+--              used: Seq Scan. B compares the raw column: Index or Bitmap scan.
+--              Same rows? Check with EXCEPT.
+--           3. Expression index for A: CREATE INDEX ON reservations ((created_at::date));
+--              It FAILS: timestamptz::date depends on the session TimeZone, so it
+--              isn't IMMUTABLE. Read the error, then write it down: it's the same
+--              reason Q09 converts with AT TIME ZONE e.timezone.
+--              ((created_at AT TIME ZONE 'UTC')::date) does work, if you need it.
+--           4. Back to Q09 (one event's days): it filters on event_id first, so
+--              idx_reservations_event already does the work. Explain in one line why
+--              the AT TIME ZONE there doesn't hurt.
+-- Decide:   keep idx_reservations_created only if a real query needs it (a
+--           platform "reservations per day" report would). Otherwise drop it.
+
+
+-- -----------------------------------------------------------------------------
+-- E2 · The write cost of indexes
+-- -----------------------------------------------------------------------------
+-- Question: What does every index cost on INSERT?
+-- Steps:    1. Two empty copies of tickets:
+--                CREATE TABLE lab_tickets_bare (LIKE tickets INCLUDING DEFAULTS);
+--                CREATE TABLE lab_tickets_idx  (LIKE tickets INCLUDING ALL);
+--              (INCLUDING ALL copies the indexes, PK and UNIQUE too.)
+--              \d lab_tickets_idx: count the indexes.
+--           2. With \timing on, insert the same 200,000 rows into each:
+--                INSERT INTO lab_tickets_bare SELECT * FROM tickets LIMIT 200000;
+--              (identity column: add OVERRIDING SYSTEM VALUE after the table name)
+--              Compare the two times.
+--           3. Unused indexes, after all the patterns above:
+--                SELECT relname, indexrelname, idx_scan
+--                  FROM pg_stat_user_indexes
+--                 WHERE schemaname = 'eventbrite'
+--                 ORDER BY idx_scan, relname;
+--              idx_scan = 0 after a full lab means nothing read it.
+--              (Indexes backing PK/UNIQUE stay: they enforce rules.)
+--           4. DROP TABLE lab_tickets_bare, lab_tickets_idx;
+-- Expected: the indexed copy is clearly slower. Write the ratio in the doc.
+
+
+-- -----------------------------------------------------------------------------
+-- Last · What goes into schema.sql
+-- -----------------------------------------------------------------------------
+-- For each index that won: add it to the INDEXES section of schema.sql with a
+-- comment naming the pattern (e.g. -- 4.2 P1 browse), and remove any index it
+-- replaces. Then run_all.sql on eventbrite_lab and rerun the constraint tests:
+-- 105 must still pass. List the final decisions in docs/05-performance.md.

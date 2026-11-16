@@ -51,6 +51,13 @@ The ERD (Mermaid, renders on GitHub) and the 1NF → 3NF check are in [docs/02-d
 | `docs/05-performance.md` | 4.2 | indexes and `EXPLAIN ANALYZE`, before/after *(next)* |
 | `docs/04-concurrency.md` | 4.3 | oversell race, locks, isolation levels *(next)* |
 
-## Not in the database (on purpose)
+## Database vs app logic
 
-Some rules belong to the API (M2), and the checklist marks them `app`: rejecting a local time that falls in a daylight-saving gap or overlap, showing drafts only to their organizer, and showing an online event's link only to ticket holders.
+A rule goes in the database when breaking it would corrupt the data, no matter which code wrote it: a bug in the API, a second service, or someone in `psql`. That covers overselling (it's a race, so only a row lock can stop it), status transitions, prices that can't change after a sale, and reservations that are never deleted. A rule goes in the app (M2) when it depends on who is asking or on how the input is read, which the database can't know. The checklist marks these `app`:
+
+- rejecting a local time that falls in a daylight-saving gap or overlap;
+- showing drafts only to their organizer;
+- showing an online event's link only to ticket holders;
+- taking the user id passed to `cancel_reservation()` from the logged-in session, never from the request.
+
+Workflows such as emails and payments belong in the app too. Triggers are invisible from the API code and harder to debug, so the database keeps only the rules that must never break, and each one is covered by a test.

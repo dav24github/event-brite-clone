@@ -386,6 +386,16 @@ SET session_replication_role = DEFAULT;       -- triggers and FK checks back on
 --                       would plan with the row counts of the small seed)
 --           then the same counts query as seed.sql section 7
 -- Expected: see the header. Note the total time from \timing.
+ANALYZE;
+
+SELECT (SELECT count(*) FROM users)                                  AS users,
+        (SELECT count(*) FROM organizers)                             AS organizers,
+        (SELECT count(*) FROM venues)                                 AS venues,
+        (SELECT count(*) FROM events)                                 AS events,
+        (SELECT count(*) FROM ticket_types)                           AS ticket_types,
+        (SELECT count(*) FROM reservations)                           AS reservations,
+        (SELECT count(*) FROM tickets)                                AS tickets,
+        (SELECT count(*) FROM tickets WHERE status = 'cancelled')     AS cancelled_tickets;
 
 -- -----------------------------------------------------------------------------
 -- 7. Integrity checks                               every query must return 0
@@ -401,3 +411,50 @@ SET session_replication_role = DEFAULT;       -- triggers and FK checks back on
 --   e. reservations on draft events
 -- If one returns rows: fix the section that produced them and rerun the whole
 -- file from run_all.sql (no partial reruns: ids and random() would shift).
+
+-- a
+SELECT 'a. orphan reservations' AS check, count(*) AS bad
+    FROM reservations r
+    WHERE NOT EXISTS (SELECT 1 FROM users  u WHERE u.user_id  = r.user_id)
+        OR NOT EXISTS (SELECT 1 FROM events e WHERE e.event_id = r.event_id);
+
+SELECT 'a. orphan tickets' AS check, count(*) AS bad
+    FROM tickets t
+    WHERE NOT EXISTS (SELECT 1 FROM reservations r WHERE r.reservation_id = t.reservation_id)
+        OR NOT EXISTS (SELECT 1 FROM ticket_types tt WHERE tt.ticket_type_id = t.ticket_type_id);
+
+-- with LEFT JOIN ... IS NULL
+-- SELECT count(*) FROM reservations r
+--     LEFT JOIN users u ON u.user_id = r.user_id
+--     WHERE u.user_id IS NULL;
+
+-- b
+SELECT 'b. ticket event mismatch' AS check, count(*) AS bad
+    FROM tickets t
+    JOIN reservations r  ON r.reservation_id  = t.reservation_id
+    JOIN ticket_types tt ON tt.ticket_type_id = t.ticket_type_id
+    WHERE t.event_id <> r.event_id
+        OR t.event_id <> tt.event_id;
+
+-- c
+SELECT 'c. ticket types with more active tickets than quantity', count(*) as bad
+    FROM (
+        SELECT tt.ticket_type_id
+        FROM ticket_types tt
+        JOIN tickets t USING (ticket_type_id)
+        WHERE t.status = 'active'
+        GROUP BY tt.ticket_type_id, tt.quantity
+        HAVING count(*) > tt.quantity
+    );
+
+-- d
+SELECT 'd. status mismatch' AS check, count(*) AS bad
+    FROM tickets t
+    JOIN reservations r ON r.reservation_id = t.reservation_id
+    WHERE (t.status = 'active') <> (r.status = 'confirmed');
+
+-- e. nobody can reserve a draft (BR-E6)
+SELECT 'e. reservations on drafts' AS check, count(*) AS bad
+    FROM reservations r
+    JOIN events e ON e.event_id = r.event_id
+    WHERE e.status = 'draft';
